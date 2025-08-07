@@ -8,175 +8,9 @@ using Newtonsoft.Json;
 using RoomBoundaryExtractor.Models;
 using Arc = ACadSharp.Entities.Arc;
 using Line = ACadSharp.Entities.Line;
-using Point = RoomBoundaryExtractor.Models.Point;
 
 namespace RoomBoundaryExtractor.RoomExtractor
 {
-    public class RoomBoundaryAndFurnitureExtractor
-    {
-        public static string ExtractRoomBoundaryAndFurniture(string dwgFilePath)
-        {
-            try
-            {
-                // 加载DWG文件
-                CadDocument doc = DwgReader.Read(dwgFilePath);
-                var list = doc.Entities.ToList();
-                var roomData = new RoomData();
-
-                // 提取墙边界
-                ExtractBlocksSplitWallAndFurniture(doc, roomData);
-
-                // 转换为JSON
-                return JsonConvert.SerializeObject(roomData, Formatting.Indented);
-            }
-            catch (Exception ex)
-            {
-                return JsonConvert.SerializeObject(
-                    new { error = $"Failed to extract data: {ex.Message}" }
-                );
-            }
-        }
-
-        private static void ExtractBlocksSplitWallAndFurniture(CadDocument doc, RoomData roomData)
-        {
-            var inserts = doc.Entities.OfType<Insert>().ToList();
-
-            // 找到不可动建筑图层的 Insert 作为“坐标基准”
-            var baseInsert = inserts.FirstOrDefault(i =>
-                i.Layer?.Name?.Contains("不可动建筑图层") == true
-            );
-
-            if (baseInsert == null)
-                throw new Exception("未找到任何“不可动建筑图层”图块，无法建立坐标基准。");
-            Console.WriteLine("“不可动建筑图层”图块，无法建立坐标基准:" + baseInsert.InsertPoint);
-
-            // 遍历所有 Insert 实例
-            foreach (var insert in inserts)
-            {
-                var block = insert.Block;
-                if (block == null)
-                    continue;
-
-                var layerName = insert.Layer?.Name ?? string.Empty;
-                var name = block.Name ?? "Unnamed";
-
-                if (layerName.Contains("不可动建筑图层"))
-                {
-                    // 提取构成房间边界的图元
-                    foreach (var entity in block.Entities)
-                    {
-                        var geo = ConvertEntityToGeometry(entity);
-                        if (geo != null)
-                            roomData.Boundary.Add(geo);
-                    }
-                }
-                else
-                {
-                    // 家具图块：位置和属性统一转换成“房间坐标系”下
-                    var position = TransformByBase(insert.InsertPoint, baseInsert);
-
-                    var furniture = new Furniture
-                    {
-                        Name = name,
-                        Position = position,
-                        Rotation = Math.Round(insert.Rotation, 2),
-                        Scale = new Point
-                        {
-                            X = Math.Round(insert.XScale, 2),
-                            Y = Math.Round(insert.YScale, 2),
-                        },
-                        Geometry = new List<EntityGeometry>(),
-                    };
-
-                    // 提取图块内所有几何体
-                    foreach (var entity in block.Entities)
-                    {
-                        var geo = ConvertEntityToGeometry(entity);
-                        if (geo != null)
-                            furniture.Geometry.Add(geo);
-                    }
-                    roomData.Furniture.Add(furniture);
-                }
-            }
-        }
-
-        private static EntityGeometry? ConvertEntityToGeometry(Entity entity)
-        {
-            if (entity is Line line)
-            {
-                return new EntityGeometry
-                {
-                    Type = EntityCategory.Line,
-                    Points = new List<Point>
-                    {
-                        new Point { X = line.StartPoint.X, Y = line.StartPoint.Y },
-                        new Point { X = line.EndPoint.X, Y = line.EndPoint.Y },
-                    },
-                };
-            }
-            else if (entity is Arc arc)
-            {
-                return new EntityGeometry
-                {
-                    Type = EntityCategory.Arc,
-                    Points = new List<Point>
-                    {
-                        new Point { X = arc.Center.X, Y = arc.Center.Y },
-                    },
-                    Radius = arc.Radius,
-                    StartAngle = arc.StartAngle,
-                    EndAngle = arc.EndAngle,
-                };
-            }
-            else if (entity is Circle circle)
-            {
-                return new EntityGeometry
-                {
-                    Type = EntityCategory.Circle,
-                    Points = new List<Point>
-                    {
-                        new Point { X = circle.Center.X, Y = circle.Center.Y },
-                    },
-                    Radius = circle.Radius,
-                };
-            }
-
-            // 你可以继续支持更多类型，比如 Polyline 等
-            return null;
-        }
-
-        private static Point ComputeArcPoint(Arc arc, double angleDeg, Insert baseInsert)
-        {
-            double angleRad = angleDeg * Math.PI / 180.0;
-
-            double x = arc.Center.X + arc.Radius * Math.Cos(angleRad);
-            double y = arc.Center.Y + arc.Radius * Math.Sin(angleRad);
-
-            return TransformByBase(new XYZ(x, y, arc.Center.Z), baseInsert);
-        }
-
-        private static Point TransformByBase(XYZ pt, Insert baseInsert)
-        {
-            double rad = baseInsert.Rotation * Math.PI / 180.0;
-
-            // 缩放
-            double x = pt.X * baseInsert.XScale;
-            double y = pt.Y * baseInsert.YScale;
-
-            // 旋转
-            double cos = Math.Cos(rad);
-            double sin = Math.Sin(rad);
-            double rx = x * cos - y * sin;
-            double ry = x * sin + y * cos;
-
-            // 平移
-            rx += baseInsert.InsertPoint.X;
-            ry += baseInsert.InsertPoint.Y;
-
-            return new Point { X = Math.Round(rx, 2), Y = Math.Round(ry, 2) };
-        }
-    }
-
     public static class RoomDwgGenerator
     {
         public static void CreateDwgFromRoomData(string jsonPath, string outputDwgPath)
@@ -341,6 +175,7 @@ namespace RoomBoundaryExtractor.RoomExtractor
                     }
 
                     // 添加块定义和块实体到文档
+
                     doc.BlockRecords.Add(blockRecord);
                     addedBlocks[blockName] = blockRecord;
                 }
@@ -352,6 +187,7 @@ namespace RoomBoundaryExtractor.RoomExtractor
                     XScale = f.Scale?.X ?? 1,
                     YScale = f.Scale?.Y ?? 1,
                     Rotation = f.Rotation,
+                    Layer = furnitureLayer,
                 };
 
                 doc.Entities.Add(insert);
