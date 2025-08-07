@@ -10,7 +10,7 @@ namespace RoomBoundaryExtractor
             string jsonOutput = RoomBoundaryAndFurniture.ExtractRoomBoundaryAndFurniture(
                 dwgFilePath
             );
-            Console.WriteLine(jsonOutput);
+
             System.IO.File.WriteAllText("room_boundary_and_furniture.json", jsonOutput);
 
             RoomDwgGenerator.CreateDwgFromRoomData("room_boundary_and_furniture.json", "test.dwg");

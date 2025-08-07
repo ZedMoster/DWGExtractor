@@ -10,8 +10,8 @@
 
     public class Point
     {
-        public double X { get; set; }
-        public double Y { get; set; }
+        public double X { get; set; } = 0;
+        public double Y { get; set; } = 0;
     }
 
     public class Furniture
@@ -32,6 +32,7 @@
         Line,
         Arc,
         Circle,
+        Polyline,
     }
 
     public class EntityGeometry

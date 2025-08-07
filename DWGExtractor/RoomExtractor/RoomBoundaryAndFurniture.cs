@@ -1,6 +1,7 @@
 ﻿using ACadSharp;
 using ACadSharp.Entities;
 using ACadSharp.IO;
+using ACadSharp.Tables;
 using CSMath;
 using Newtonsoft.Json;
 using RoomBoundaryExtractor.Models;
@@ -60,14 +61,16 @@ namespace RoomBoundaryExtractor.RoomExtractor
                 }
                 else
                 {
+                    // TODO 优化为导出块到本地,然后创建的时候直接再入本地的块插入,不这样重新创建,容易失败
+                    var file = ExportBlockToDwg(
+                        block,
+                        @"C:\git\DWGExtractor\DWGExtractor\bin\Debug\net8.0"
+                    );
+
                     var furniture = new Furniture
                     {
-                        Name = name,
-                        Position = new Point
-                        {
-                            X = Math.Round(insert.InsertPoint.X - baseInsert.InsertPoint.X, 2),
-                            Y = Math.Round(insert.InsertPoint.Y - baseInsert.InsertPoint.Y, 2),
-                        },
+                        Name = file,
+                        Position = TransformPoint(insert.InsertPoint, insert, baseInsert),
                         Rotation = Math.Round(insert.Rotation, 2),
                         Scale = new Point
                         {
@@ -76,12 +79,12 @@ namespace RoomBoundaryExtractor.RoomExtractor
                         },
                     };
 
-                    foreach (var entity in block.Entities)
-                    {
-                        var geo = ConvertEntityToGeometryWithTransform(entity, insert, baseInsert);
-                        if (geo != null)
-                            furniture.Geometry.Add(geo);
-                    }
+                    //foreach (var entity in block.Entities)
+                    //{
+                    //    var geo = ConvertEntityToGeometryWithTransform(entity, insert, baseInsert);
+                    //    if (geo != null)
+                    //        furniture.Geometry.Add(geo);
+                    //}
 
                     roomData.Furniture.Add(furniture);
                 }
@@ -109,20 +112,6 @@ namespace RoomBoundaryExtractor.RoomExtractor
                     },
                 };
             }
-            else if (entity is Circle circle)
-            {
-                var center = TransformPoint(circle.Center, insert, baseInsert);
-
-                return new EntityGeometry
-                {
-                    Type = EntityCategory.Circle,
-                    Points = new List<Point>
-                    {
-                        new Point { X = Math.Round(center.X, 2), Y = Math.Round(center.Y, 2) },
-                    },
-                    Radius = Math.Round(circle.Radius * insert.XScale, 2),
-                };
-            }
             else if (entity is Arc arc)
             {
                 var center = TransformPoint(arc.Center, insert, baseInsert);
@@ -139,7 +128,49 @@ namespace RoomBoundaryExtractor.RoomExtractor
                     EndAngle = arc.EndAngle + insert.Rotation,
                 };
             }
+            else if (entity is Circle circle)
+            {
+                var center = TransformPoint(circle.Center, insert, baseInsert);
+                return new EntityGeometry
+                {
+                    Type = EntityCategory.Circle,
+                    Points = new List<Point>
+                    {
+                        new Point { X = Math.Round(center.X, 2), Y = Math.Round(center.Y, 2) },
+                    },
+                    Radius = Math.Round(circle.Radius * insert.XScale, 2),
+                };
+            }
+            else if (entity is LwPolyline lw)
+            {
+                var points = lw
+                    .Vertices.Select(v =>
+                    {
+                        var pt = TransformPoint(
+                            new XYZ
+                            {
+                                X = Math.Round(v.Location.X, 2),
+                                Y = Math.Round(v.Location.Y, 2),
+                                Z = 0,
+                            },
+                            insert,
+                            baseInsert
+                        );
+                        return new Point { X = Math.Round(pt.X, 2), Y = Math.Round(pt.Y, 2) };
+                    })
+                    .ToList();
 
+                return new EntityGeometry { Type = EntityCategory.Polyline, Points = points };
+            }
+            else if (entity is Insert insert2)
+            {
+                // 嵌套Insert：递归处理
+                foreach (var item in insert2.Block.Entities)
+                {
+                    return ConvertEntityToGeometryWithTransform(item, insert2, baseInsert);
+                }
+            }
+            Console.WriteLine(entity);
             return null;
         }
 
@@ -162,6 +193,41 @@ namespace RoomBoundaryExtractor.RoomExtractor
             ry -= baseInsert.InsertPoint.Y;
 
             return new Point { X = Math.Round(rx, 2), Y = Math.Round(ry, 2) };
+        }
+
+        private static string ExportBlockToDwg(BlockRecord originalBlockRecord, string folderPath)
+        {
+            if (originalBlockRecord == null || originalBlockRecord.Entities.Count == 0)
+                return string.Empty;
+
+            var blockDoc = new CadDocument();
+            var clonedBlockRecord = originalBlockRecord.Clone() as BlockRecord;
+            foreach (var entity in originalBlockRecord.Entities)
+            {
+                if (entity.Clone() is Entity cloned)
+                {
+                    clonedBlockRecord.Entities.Add(cloned);
+                }
+            }
+
+            // 添加克隆的 BlockRecord
+            blockDoc.BlockRecords.Add(clonedBlockRecord);
+
+            // 创建 Insert 实体（插入克隆后的 BlockRecord）
+            var insert = new Insert(clonedBlockRecord) { InsertPoint = XYZ.Zero };
+            blockDoc.Entities.Add(insert);
+
+            // 确保文件名合法
+            string safeName = string.Concat(
+                originalBlockRecord.Name.Split(Path.GetInvalidFileNameChars())
+            );
+            string dwgPath = Path.Combine(folderPath, $"{safeName}.dwg");
+
+            // 写入 DWG 文件
+            using var writer = new DwgWriter(dwgPath, blockDoc);
+            writer.Write();
+
+            return dwgPath;
         }
     }
 }
